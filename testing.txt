@@ -1,0 +1,94 @@
+import os                                                                           # Used to acess local files in python
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+#import h5py
+import librosa
+import numpy as np
+#import tensorflow as tf
+#import matplotlib.pyplot as plt
+import tensorflow.python.keras as tf_keras
+from tensorflow.python.keras import layers, models
+from tensorflow.python.keras.engine import data_adapter
+from tensorflow.python.keras.layers import Conv1D, MaxPooling1D, Flatten, Dense
+from sklearn.model_selection import train_test_split
+from keras import _version_
+tf_keras._version_ = _version_
+
+
+def _is_distributed_dataset(ds):
+    return isinstance(ds, data_adapter.input_lib.DistributedDatasetSpec)
+data_adapter._is_distributed_dataset = _is_distributed_dataset
+
+#file = h5py.File("C:/Users/Sudarshana/Desktop/TFfile/MODEL/uprecog.h5", "w")        # Create a HDF5 file and open in write mode
+
+def load_data(data_dir, target_word, sr=16000, duration=1.5):
+    X, y = [], []
+    for label in os.listdir(data_dir):                                              # Save the up and not up audio samples inside seperate folders inside data_dir named 'up' and 'other' respectively  
+        label_dir = os.path.join(data_dir, label)
+        for file_name in os.listdir(label_dir):
+            file_path = os.path.join(label_dir, file_name)
+            audio, _ = librosa.load(file_path, sr=sr, duration=duration)            # Load the saved audio file for testing
+            mfccs = librosa.feature.mfcc(y=audio, sr=sr, n_mfcc=40)                 # Extract MFCCs from the audio 
+            mfccs = np.expand_dims(mfccs, axis=-1)                                  # Expand the MFCC spectogram from 2D to 3D
+            X.append(mfccs)                                                         # Array of all the MFCC spectograms
+            y.append(1 if label == target_word else 0)                              # Array of labels indicating if the file is 'up' or not
+    return np.array(X), np.array(y)                                                     # If you encounter a dimension mismatch error during loading of X array, then check if all test audio samples are longer than the sampling duration.
+
+def create_model(input_shape):
+    model = models.Sequential([
+        layers.Conv2D(32, (3, 3), activation='relu'),                               # 2D convolution
+        layers.MaxPooling2D((2, 2)),
+        layers.Conv2D(64, (3, 3), activation='relu'),
+        layers.MaxPooling2D((2, 2)),
+        layers.Conv2D(64, (3, 3), activation='relu'),
+        layers.Flatten(),
+        layers.Dense(64, activation='relu'),
+        layers.Dense(1, activation='sigmoid')
+    ])
+    model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+    return model
+
+def extract_features(file_name):
+    sr = 16000                                                                          # If u encounter a dimension mismatch error during testing, make sure to keep the sampling rate same everywhere
+    audio, _= librosa.load(file_name, sr=sr, duration=1.5 ,res_type='kaiser_fast')      # Load the saved audio file to be recognised
+    mfccs = librosa.feature.mfcc(y=audio, sr=sr, n_mfcc=40)                             # Extract MFCCs from the audio 
+    mfccs = np.expand_dims(mfccs, axis=-1)                                              # Expand the MFCC spectogram from 2D to 3D
+    return mfccs
+
+def predict_word(file_name):
+    feature = extract_features(file_name)                                               # Call the function to extract the MFCCs from the test audio
+    feature = np.expand_dims(feature, axis=0)                                           # Expand the MFCC spectogram from 2D to 3D
+    prediction = model.predict(feature)                                                 # Returns a correlation coefficient [0<x<1] between the test audio and training set
+    print(prediction)
+    if prediction >= 0.8:                                                               # Conclude if the test audio is 'up' or not by comparing the coefficient with a treshold
+        return "UP"
+    elif prediction <= 0.1:
+        return "Not UP"
+    else:
+        return "Unclear"
+
+data_dir = 'C:/data/updata'
+X, y = load_data(data_dir, target_word="up")
+
+X_train, X_test, y_train, y_test=train_test_split(X, y, test_size=0.2, random_state=42) # Split the whole input data into training and validation dataset in the ratio 5:1 [1/5=0.2]
+
+model = create_model((40, 47, 1))                                                       # Create a Tensor model of dimensions 40x47x1
+
+model.fit(X_train, y_train, validation_data=(X_test, y_test), epochs=20, batch_size=32) # Fit the features of training dataset into the model to extract the weightages
+val_loss, val_acc = model.evaluate(X_test, y_test)                                      # Evaluate the trained model using the validation split of the total dataset
+print(f"Validation Loss: {val_loss}, Validation Accuracy: {val_acc}")                   # As we know wheather the validation data set is 'up' or not, we can tell the accuracy of the model
+
+model.save('C:/Users/Sudarshana/Desktop/TFfile/MODEL/uprecog.keras')                    # Save the model configuration, architecture, weights and optimizer state in .keras format 
+model.save_weights('C:/Users/Sudarshana/Desktop/TFfile/MODEL/uprecog.weights.h5', overwrite=True)       # Save the weights of the trained model into a HDF5 file to acess the trained model in another application
+
+resultbn = predict_word('C:/Users/Sudarshana/Music/EL/test_bn.wav')
+print("Blank Noise identified as:", resultbn) 
+resulthn = predict_word('C:/Users/Sudarshana/Music/EL/test_hn.wav')
+print("Loud noise identified as:", resulthn)                                                  # Final Result
+resultd = predict_word('C:/Users/Sudarshana/Music/EL/test_d.wav')
+print("Down identified as:", resultd)
+resultl = predict_word('C:/Users/Sudarshana/Music/EL/test_l.wav')
+print("Left identified as:", resultl)                                                   # Final Result
+resultr = predict_word('C:/Users/Sudarshana/Music/EL/test_r.wav')
+print("Right identified as:", resultr)                                                 # Final Result
+resultu = predict_word('C:/Users/Sudarshana/Music/EL/test_u.wav')
+print("Up identified as:", resultu)
